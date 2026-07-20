@@ -22,5 +22,5 @@ The `/health` endpoint in `api/routes/health.py` is supposed to report whether P
 **Setup confirmation:** [x] App runs locally at localhost:5173
 *(Confirmed: `docker compose up -d`, `make setup`, and `make run` complete; frontend returns HTTP 200 at localhost:5173 and the API responds at localhost:8000. As a bonus, `curl localhost:8000/health` live-reproduces the exact bug in issue #155 — the server log shows `error="'Settings' object has no attribute 'redis_host'"` on every request.)*
 
-**Cohort ledger:** [ ] Issue added to cohort ledger
-*(Not yet done — the ledger is an external spreadsheet outside this repo; needs to be filled in manually.)*
+**Cohort ledger:** [x] Issue added to cohort ledger
+*(Done — row added to the cohort ledger, and issue #155 claimed via a comment on GitHub.)*
