@@ -24,3 +24,34 @@ The `/health` endpoint in `api/routes/health.py` is supposed to report whether P
 
 **Cohort ledger:** [x] Issue added to cohort ledger
 *(Done — row added to the cohort ledger, and issue #155 claimed via a comment on GitHub.)*
+
+## Week 8 — Reproduction & solution planning
+
+**Reproduction commit link:** https://github.com/omnilabss/pathreview/commit/c429467d0f7c37dd7616ff92ce3d548296a103b5
+
+**Reproduction summary:**
+I added a unit test (`tests/unit/test_health_check.py`) that calls the
+`health_check()` endpoint directly with a mocked database and a mocked, fully
+reachable Redis client. Even with Redis "up," the endpoint still marks Redis
+`unhealthy` and raises `HTTPException(503)`, because `settings.redis_host` in
+`api/routes/health.py` raises `AttributeError` (the `Settings` class only
+defines `redis_url`). The captured log line is
+`redis_health_check_failed error="'Settings' object has no attribute 'redis_host'"`,
+and the endpoint returns `{'dependencies': {'postgres': 'healthy', 'redis':
+'unhealthy', 'vector_db': 'healthy'}, ...}` — i.e. the broad `except Exception`
+masks a config bug as a fake "Redis is down." (I first saw this live in Week 7
+via `curl localhost:8000/health` while the app was running.)
+
+**PLAN.md link:** https://github.com/omnilabss/pathreview/blob/fix/155-health-check-redis-host/PLAN.md
+
+**Walkthrough video (recommended):** _Not recorded (optional / not graded)._
+
+**Blockers or open questions:**
+- No blockers on the fix itself — the change is a one-line switch to
+  `redis.Redis.from_url(settings.redis_url, decode_responses=True)` in
+  `api/routes/health.py`, and the reproduction test above will flip from
+  failing to passing once that lands.
+- One thing to decide in Week 9 (out of scope for #155, noted in PLAN.md):
+  `redis.Redis(...).ping()` is a blocking call inside an `async def` endpoint.
+  I plan to leave that as-is to keep the fix minimal, and only flag it as a
+  possible follow-up rather than widen scope.
