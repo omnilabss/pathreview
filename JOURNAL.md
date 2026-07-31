@@ -55,3 +55,132 @@ via `curl localhost:8000/health` while the app was running.)
   `redis.Redis(...).ping()` is a blocking call inside an `async def` endpoint.
   I plan to leave that as-is to keep the fix minimal, and only flag it as a
   possible follow-up rather than widen scope.
+
+## Week 9 — Solution building & PR submission
+
+### Check-in 1 (mid-week)
+
+**Current progress:**
+Steps 1–4 of PLAN.md are done. The fix itself is in `api/routes/health.py`:
+the Redis probe now builds its client with
+`redis.Redis.from_url(settings.redis_url, decode_responses=True)` instead of
+reading the non-existent `settings.redis_host` / `settings.redis_port`. I
+dropped the old `db=0` argument because the database index is already encoded
+in the URL (`redis://localhost:6379/0`), and kept `decode_responses=True` so
+reply types are unchanged. Before writing the fix I grepped the whole codebase
+to confirm the scope claim in my plan: `api/routes/health.py` was the *only*
+place reading `redis_host`/`redis_port`, `core/config.py` defines `redis_url`
+as the single Redis field, `REDIS_URL` is the only Redis key in
+`.env.example`, and every other consumer (`safety/rate_limiter.py`,
+`safety/monitoring.py`, `agent/memory/session_store.py`,
+`agent/tools/market_analyzer.py`) takes an already-constructed client by
+injection. So the health check really was the outlier, and no other module
+needed to change.
+
+I also grew the Week 8 reproduction module into a proper regression suite in
+`tests/unit/test_health_check.py` — six tests now, up from the original two.
+Beyond the two reproduction tests (Redis reported healthy when reachable, and
+a healthy body returned instead of a 503), I added a test asserting the client
+is built via `from_url(settings.redis_url, decode_responses=True)` — that one
+is the direct guard against anyone reintroducing the host/port form — a
+parametrized test covering URLs the old form silently dropped (non-zero DB
+index, credentials, `rediss://` TLS), a failure-path test proving a genuine
+outage still yields `redis: "unhealthy"` and a 503, and a test proving a
+Postgres outage doesn't drag the Redis result down with it.
+
+**Next steps:**
+Finish the verification sweep, commit the fix and the tests separately, open
+the PR, and ask for peer review in Slack before marking it ready.
+
+**Blockers:**
+The dev machine's filesystem is throttled to roughly a hundredth of normal
+speed right now — `import pytest` alone takes two and a half minutes of wall
+clock for a third of a second of CPU — so the full unit suite and `mypy` are
+taking far longer than the ~30 seconds the Makefile advertises. Not a blocker
+on the change itself, just on how fast I can confirm it.
+
+One thing I want to flag now rather than at submission: this repo has
+substantial *pre-existing* check failures on `main`, so "passes" for my PR has
+to mean "introduces no new failures." `make check` fails at its very first
+step — `ruff check .` reports 182 errors across `tests/` (71), `api/` (45),
+`rag/`, `ingestion/`, `agent/` (15 each), `safety/` (12), `core/` (5) and
+`alembic/` (4), mostly unsorted imports (52 × I001), unused locals (24 × F841)
+and long lines (20 × E501). Because `make check` runs `lint format typecheck`
+in order and stops at the first failure, it never even reaches the type
+checker. The same is true in CI: `.github/workflows/ci.yml` runs `ruff check .`
+and `black --check .`, so the lint job is already red on `main`. Four of those
+ruff errors are in `api/routes/health.py` itself (two unsorted import blocks,
+an unused `timedelta` import, and a `B008` on `Depends` in the signature). I
+deliberately left all four alone — they're unrelated to #155 and fixing them
+would bloat the diff — and I verified my edit adds none of its own by running
+ruff against the pre-edit file content via
+`git show HEAD:api/routes/health.py | ruff check --stdin-filename api/routes/health.py -`
+and diffing the result against the post-edit run: the same four errors before
+and after, and my new test file is clean on both.
+
+---
+
+### Check-in 2 (end of week)
+
+**PR link:** https://github.com/omnilabss/pathreview/pull/1
+
+**Branch:** `fix/155-health-check-redis-host`
+
+**What you built:**
+The `/health` endpoint's Redis probe now builds its client with
+`redis.Redis.from_url(settings.redis_url, decode_responses=True)` instead of
+reading `settings.redis_host` / `settings.redis_port`, which `Settings` never
+defined. Those missing attributes raised `AttributeError` on every request;
+the endpoint's broad `except Exception` swallowed it and recorded Redis as
+`unhealthy`, which forced the overall status to `unhealthy` and returned HTTP
+503 on every single request even when Redis was perfectly reachable. Using the
+one Redis field that actually exists makes the check report Redis's real
+status. I dropped the old `db=0` argument because the database index is
+already encoded in the URL, and kept `decode_responses=True` so reply types
+are unchanged.
+
+**Tests added or updated:**
+`tests/unit/test_health_check.py` only — six tests, grown from the two
+reproduction tests I committed in Week 8. The two originals cover the bug
+itself (Redis reported healthy when reachable; a healthy body returned instead
+of a 503). The four new ones cover: that the client is built via
+`from_url(settings.redis_url, decode_responses=True)`, which is the assertion
+that actually stops the host/port form from coming back; a parametrized sweep
+over URLs the old form silently dropped (non-zero DB index, credentials,
+`rediss://` TLS); a failure path proving a genuine outage still reports
+`redis: "unhealthy"` with a 503, so the fix doesn't mask real downtime; and a
+probe-independence case proving a Postgres outage doesn't drag the Redis
+result down with it.
+
+**Self-review confirmation:** [x] `make check` — no new failures  [ ] `make test-unit` — could not be executed (see below)
+
+Both boxes need explanation, because this repo has documented pre-existing
+failures and my machine hit a hard environment failure.
+
+`make check` does not pass on `main` and does not pass here either — it stops
+at its first step, `ruff check .`, on 182 pre-existing errors (detailed in
+Check-in 1). Per the pre-existing-failures guidance, the bar is "introduces no
+new failures," and I verified that directly rather than by eyeballing it: I
+ran ruff against the pre-change file content through `--stdin-filename` and
+diffed it against the post-change run. Four errors in `api/routes/health.py`
+before, the same four after, none of them mine; new test file clean both ways.
+
+`make test-unit` I could not get to run at all, and I want to be straight
+about that rather than tick the box. The dev machine's filesystem degraded
+over the course of the day to the point where Python cannot load native
+extension modules: the run aborts during collection with
+`ImportError: dlopen(.../pydantic_core/_pydantic_core.cpython-311-darwin.so): mmap(size=0x3F5CF0) failed with errno=60`
+— `errno 60` is `ETIMEDOUT`, i.e. the `mmap` of the shared library timed out.
+`black` and `mypy` died the same way. The full suite ran 33 minutes and
+accumulated 0.84 seconds of CPU before I stopped it; a single-file run took
+12.5 minutes to reach that import error. This is an infrastructure failure,
+not a signal about the change. What I can defend in the meantime: a grep
+confirmed `tests/unit/test_health_check.py` is the only test file in the repo
+that references the health route or `core.config`, so no other unit test can
+be affected by this change. The tests need a green run on unthrottled
+hardware or in CI before I'd call this verified, and CI on the PR is the
+natural place for that.
+
+**Draft PR feedback received from:** _TODO — replace with the classmate or
+mentor who reviews the PR in Slack (or "none" if no review comes back before
+submission)._
