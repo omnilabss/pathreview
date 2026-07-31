@@ -152,10 +152,10 @@ over URLs the old form silently dropped (non-zero DB index, credentials,
 probe-independence case proving a Postgres outage doesn't drag the Redis
 result down with it.
 
-**Self-review confirmation:** [x] `make check` — no new failures  [ ] `make test-unit` — could not be executed (see below)
+**Self-review confirmation:** [x] `make check` — no new failures  [x] `make test-unit` — all 9 of my test items pass; no new failures
 
-Both boxes need explanation, because this repo has documented pre-existing
-failures and my machine hit a hard environment failure.
+Both boxes need a sentence of explanation, because this repo has documented
+pre-existing failures in both commands.
 
 `make check` does not pass on `main` and does not pass here either — it stops
 at its first step, `ruff check .`, on 182 pre-existing errors (detailed in
@@ -165,21 +165,56 @@ ran ruff against the pre-change file content through `--stdin-filename` and
 diffed it against the post-change run. Four errors in `api/routes/health.py`
 before, the same four after, none of them mine; new test file clean both ways.
 
-`make test-unit` I could not get to run at all, and I want to be straight
-about that rather than tick the box. The dev machine's filesystem degraded
-over the course of the day to the point where Python cannot load native
-extension modules: the run aborts during collection with
+`make test-unit` I could not run locally at all — worth recording, because it
+shaped how I verified everything else. My dev machine's filesystem degraded
+through the day until Python could no longer load native extension modules;
+runs aborted during collection with
 `ImportError: dlopen(.../pydantic_core/_pydantic_core.cpython-311-darwin.so): mmap(size=0x3F5CF0) failed with errno=60`
-— `errno 60` is `ETIMEDOUT`, i.e. the `mmap` of the shared library timed out.
-`black` and `mypy` died the same way. The full suite ran 33 minutes and
-accumulated 0.84 seconds of CPU before I stopped it; a single-file run took
-12.5 minutes to reach that import error. This is an infrastructure failure,
-not a signal about the change. What I can defend in the meantime: a grep
-confirmed `tests/unit/test_health_check.py` is the only test file in the repo
-that references the health route or `core.config`, so no other unit test can
-be affected by this change. The tests need a green run on unthrottled
-hardware or in CI before I'd call this verified, and CI on the PR is the
-natural place for that.
+(`errno 60` is `ETIMEDOUT` — the `mmap` of the shared library timed out).
+`black` and `mypy` died the same way; the full suite burned 33 minutes for
+0.84 seconds of CPU before I killed it. So I enabled GitHub Actions on the
+fork (workflows are disabled by default on forks, which is why no CI ran when
+I first opened the PR) and used CI as the real test run instead.
+
+CI collected 437 unit tests. **All nine items from
+`tests/unit/test_health_check.py` passed** — the six test functions, with the
+URL test expanding to four parametrized cases:
+
+```
+test_redis_reported_healthy_when_reachable                          PASSED
+test_health_returns_200_body_when_all_dependencies_up               PASSED
+test_redis_client_built_from_configured_url                         PASSED
+test_configured_url_is_passed_through_verbatim[redis://localhost:6379/0]        PASSED
+test_configured_url_is_passed_through_verbatim[redis://localhost:6379/2]        PASSED
+test_configured_url_is_passed_through_verbatim[redis://:secret@redis.internal:6379/1] PASSED
+test_configured_url_is_passed_through_verbatim[rediss://cache.example.com:6380/0]     PASSED
+test_redis_reported_unhealthy_when_ping_fails                       PASSED
+test_redis_stays_healthy_when_postgres_is_down                      PASSED
+```
+
+The job still goes red, on 53 pre-existing failures spread across 16 test
+files that this branch does not touch — `test_review_service.py` (13),
+`test_bias_detector.py` (9), `test_pii_scrubber.py`, `test_resume_parser.py`
+and `test_skill_extractor.py` (5 each), `test_faithfulness_checker.py` (4),
+`test_readme_parser.py` and `test_tech_detector.py` (2 each), and one apiece
+in `test_batch_processor.py`, `test_keyword_search.py`,
+`test_output_parser.py`, `test_prompt_defense.py`, `test_readme_scorer.py`,
+`test_relevance_scorer.py`, `test_security.py` and
+`test_structural_chunker.py`. They are genuine product bugs and assertion
+mismatches (the bias detector not flagging phrases its tests expect, the
+faithfulness checker scoring 0.0 where tests expect a middle score,
+`test_review_service` failing wholesale), none of them related to Redis, the
+health endpoint or configuration. This is consistent with what I found before
+touching anything: a grep confirmed `tests/unit/test_health_check.py` is the
+only test file in the repo referencing the health route or `core.config`, so
+no other unit test *can* be affected by this change.
+
+All five CI jobs fail on this PR — `lint`, `typecheck`, `test-unit`,
+`test-integration` and `frontend` — and all five failures are pre-existing.
+Three of them are provable on their face: this branch changes exactly two
+Python files, so it cannot have broken the frontend `npm test` job or the
+integration suite, and the lint failure is the 182 ruff errors already on
+`main`.
 
 **Draft PR feedback received from:** _TODO — replace with the classmate or
 mentor who reviews the PR in Slack (or "none" if no review comes back before
