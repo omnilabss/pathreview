@@ -216,6 +216,5 @@ Python files, so it cannot have broken the frontend `npm test` job or the
 integration suite, and the lint failure is the 182 ruff errors already on
 `main`.
 
-**Draft PR feedback received from:** _TODO — replace with the classmate or
-mentor who reviews the PR in Slack (or "none" if no review comes back before
-submission)._
+**Draft PR feedback received from:** none — no peer or mentor review came back
+before submission.
