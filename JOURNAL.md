@@ -218,3 +218,106 @@ integration suite, and the lint failure is the 182 ruff errors already on
 
 **Draft PR feedback received from:** none — no peer or mentor review came back
 before submission.
+
+## Week 10 — Iteration & reflection
+
+### Reviewer feedback
+
+**Feedback received:** [ ] Yes  [x] No — still awaiting review
+
+**Summary of feedback:**
+No feedback came in. I checked [PR #1](https://github.com/omnilabss/pathreview/pull/1)
+directly against the GitHub API (comments, reviews, and inline review comments
+endpoints) and all three came back empty. Consistent with the Su26 course note
+that reviewer feedback isn't a feature this term — there's no maintainer on
+the other end of a student fork PR to respond.
+
+**How you responded:**
+N/A — nothing to respond to.
+
+---
+
+### Reflection
+
+**What was harder than you expected?**
+Writing the fix was trivial — three lines, and I knew the correct form
+(`redis.Redis.from_url(settings.redis_url, ...)`) as soon as I confirmed
+`redis_host`/`redis_port` didn't exist on `Settings` in Week 7. What ate the
+entire week was *proving* it. My dev machine's sandbox degraded over the
+course of Week 9 to the point where Python couldn't `mmap` a shared library —
+`pytest`, `black`, and `mypy` all died with `errno=60` (`ETIMEDOUT`) trying to
+load `pydantic_core`. A full local `make test-unit` ran 33 minutes and
+accumulated 0.84 seconds of CPU before I gave up on it. I hadn't budgeted for
+"the tools I need to verify my fix don't work" as a category of problem
+separate from "my fix is wrong." I ended up leaning on GitHub Actions CI as
+the actual test oracle, which then had its own surprise: Actions is disabled
+by default on forked repos, so my first PR sat with zero CI runs until I
+found and flipped that setting and pushed an empty commit to re-trigger a
+`synchronize` event.
+
+**What did you learn about working in a large codebase?**
+The single biggest adjustment was learning to prove "my change didn't break
+anything" instead of asserting it. This repo already had 182 ruff errors and
+53 failing unit tests on `main` before I touched a single file, so "tests
+pass" and "lint passes" were never going to be true in an absolute sense —
+the only honest claim I could make was relative: I diffed `ruff check` output
+against the pre-change version of `health.py` via
+`git show HEAD:... | ruff check --stdin-filename ... -` to show my edit added
+zero new lint errors, and I grepped the whole codebase for `redis_host` and
+for anything importing `core.config` or the health route to establish that
+`tests/unit/test_health_check.py` was the *only* test file that could
+possibly be affected by my change. That kind of blast-radius bounding isn't
+something you need on a solo project where you already know every line you
+'ve touched recently — here I was editing code I'd read for the first time
+three weeks earlier, in a repo with contributors I've never talked to. I also
+learned that a fork's issue/PR numbering doesn't inherit from upstream: my PR
+came back as `#1`, which meant `Closes #155` in my PR body was a dangling
+reference until I changed it to `Closes ascherj/pathreview#155`. Small thing,
+but it's the kind of repo-topology detail that only bites you once you've
+actually forked something.
+
+**How did AI tools help — and where did they fall short?**
+AI assistance (Claude Code) was most valuable for the two things that are
+tedious but need to be *exhaustive*: sweeping the codebase to confirm scope
+(grepping every `redis` usage across `api/`, `safety/`, `agent/`, and
+`ingestion/` to verify the health check really was the only broken call site,
+not just the one I happened to notice) and diffing tool output before/after a
+change to separate pre-existing noise from regressions. It also drafted the
+expanded test suite — going from my original two reproduction tests to six,
+including a test that pins the exact `from_url(...)` call signature (so a
+future edit can't silently reintroduce the host/port form) and a
+failure-path test proving the fix doesn't paper over a genuine Redis outage.
+I wouldn't have thought to write that last one on my own; a "make the bug go
+away" mentality tends to stop at the happy path.
+
+Where it fell short was anything requiring actual access or actual judgment
+under uncertainty. It couldn't fix the sandbox's `mmap` failures — that's a
+real infrastructure problem, not a code problem — and it couldn't open the
+PR, install the `gh` CLI, or authenticate to GitHub from a non-interactive
+session, so pasting the PR body and fixing the `Closes #155` reference were
+manual steps on my end. More importantly, several decisions genuinely needed
+a human: which repo the PR should target (my fork vs. upstream), whether to
+open as a draft or ready-for-review, and what to write for "reviewer
+feedback" when none exists. Those aren't things an AI should guess at even if
+it technically could.
+
+**What would you do differently if you started over?**
+I'd check whether CI actually runs on a fork *before* burning an hour on local
+verification. If I'd opened even an empty draft PR in Week 7 or 8 just to see
+the Actions tab, I'd have discovered the "workflows disabled on forks"
+default early, instead of discovering it in Week 9 while my local machine was
+also failing. I'd also start the local-environment sanity check (a trivial
+`pytest --collect-only` or similar) at the top of Week 9 rather than assuming
+the environment that worked in Week 7 was still healthy — I lost real time to
+a slow-degrading problem I could have caught on day one with a cheap smoke
+test.
+
+**What are you most proud of from this module?**
+Not the fix itself — it's three lines. I'm most proud of the failure-path
+test (`test_redis_reported_unhealthy_when_ping_fails`) and the
+probe-independence test (`test_redis_stays_healthy_when_postgres_is_down`).
+Both exist specifically to stop me (or whoever touches this file next) from
+"fixing" the bug in a way that makes the health check lie in the opposite
+direction — always healthy, regardless of real Redis state. Writing tests
+that guard against the fix itself being wrong, not just against the original
+bug coming back, felt like the actual skill this module was trying to teach.
